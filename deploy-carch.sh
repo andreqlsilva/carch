@@ -15,6 +15,8 @@ set -euo pipefail
 #    LUKS_PASS="senha_criptografia123"
 #    HEADSCALE_URL="https://hs.your-domain.com"
 #    HEADSCALE_AUTHKEY="hskey-xxxxxxxxxxxxxxxxxxx"
+#    WIFI_SSID="nome-da-rede"        # optional
+#    WIFI_PASS="senha-wifi"           # optional
 
 SECRETS_FILE="$(dirname "$0")/deploy-secrets.env"
 if [[ ! -f "$SECRETS_FILE" ]]; then
@@ -74,7 +76,7 @@ mount "${DISK}p1" /mnt/boot/efi
 #   - aide: file integrity baseline — initialized at end of chroot after all
 #     packages are installed so the DB reflects the final system state.
 pacstrap -K /mnt \
-    base linux linux-firmware base-devel \
+    base linux linux-firmware sof-firmware base-devel \
     btrfs-progs grub efibootmgr \
     snapper snap-pac grub-btrfs btrfs-assistant \
     borg vorta udisks2 ntfs-3g kio-extras \
@@ -90,10 +92,10 @@ pacstrap -K /mnt \
     keepassxc kleopatra ksshaskpass tailscale \
     ark p7zip unrar zip unzip plasma-vault \
     kate ghostwriter okular pdfarranger \
-    mpv elisa \
-    bluedevil plasma-systemmonitor kcalc kolourpaint \
+    mpv vlc elisa \
+    bluedevil plasma-systemmonitor kcalc kolourpaint pinta \
     firefox chromium \
-    ffmpeg imagemagick handbrake soundconverter \
+    ffmpeg imagemagick handbrake soundconverter yt-dlp \
     thunderbird claws-mail \
     xdg-user-dirs power-profiles-daemon plasma-firewall \
     samba kdenetwork-filesharing avahi wsdd \
@@ -101,8 +103,8 @@ pacstrap -K /mnt \
     clamav audit chrony \
     cryptsetup libxml2 kscreen \
     sddm sddm-kcm kwalletmanager kwallet-pam \
-    libreoffice-fresh libreoffice-fresh-pt-br \
-    openssh spectacle wl-clipboard \
+    libreoffice-fresh libreoffice-fresh-pt-br mythes-pt-br \
+    openssh spectacle wl-clipboard tree \
     pcsc-lite ccid opensc \
     aide
 
@@ -268,6 +270,9 @@ rm -rf /tmp/yay
 
 # serpro-signer: wraps a Java app that activates against Serpro servers on
 # first real user session — installation here is fine, activation is not.
+yay -S --noconfirm hunspell-pt-br \
+    || echo "WARN: hunspell-pt-br failed — install manually post-deploy"
+
 yay -S --noconfirm serpro-signer \
     || echo "WARN: serpro-signer failed — install manually post-deploy"
 
@@ -298,7 +303,34 @@ echo "AIDE baseline initialized."
 
 EOF
 
-# 9. Unmount and reboot
+# 9. WiFi pre-configuration (optional)
+if [[ -n "${WIFI_SSID:-}" && -n "${WIFI_PASS:-}" ]]; then
+    mkdir -p /mnt/etc/NetworkManager/system-connections
+    cat > "/mnt/etc/NetworkManager/system-connections/${WIFI_SSID}.nmconnection" <<NMEOF
+[connection]
+id=${WIFI_SSID}
+type=wifi
+
+[wifi]
+mode=infrastructure
+ssid=${WIFI_SSID}
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk=${WIFI_PASS}
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=stable-privacy
+method=auto
+NMEOF
+    chmod 600 "/mnt/etc/NetworkManager/system-connections/${WIFI_SSID}.nmconnection"
+fi
+
+# 10. Unmount and reboot
 umount -R /mnt
 cryptsetup close cryptroot
 reboot

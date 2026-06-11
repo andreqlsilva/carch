@@ -18,12 +18,12 @@ set -euo pipefail
 #    WIFI_SSID="nome-da-rede"        # optional
 #    WIFI_PASS="senha-wifi"           # optional
 
-SECRETS_FILE="$(dirname "$0")/deploy-secrets.env"
+SECRETS_FILE="$(dirname "$0")/secrets.env"
 if [[ ! -f "$SECRETS_FILE" ]]; then
     echo "ERROR: $SECRETS_FILE not found. Create it before running this script." >&2
     exit 1
 fi
-# shellcheck source=deploy-secrets.env
+# shellcheck source=secrets.env
 source "$SECRETS_FILE"
 shred -u "$SECRETS_FILE"
 
@@ -80,7 +80,7 @@ pacstrap -K /mnt \
     btrfs-progs grub efibootmgr \
     snapper snap-pac grub-btrfs btrfs-assistant \
     borg vorta udisks2 ntfs-3g kio-extras \
-    git neovim less networkmanager \
+    git neovim less man-db texinfo networkmanager \
     pipewire pipewire-pulse pipewire-alsa \
     bluez bluez-utils firewalld cups \
     nano sudo sane sane-airscan skanlite \
@@ -96,7 +96,7 @@ pacstrap -K /mnt \
     bluedevil plasma-systemmonitor kcalc kolourpaint pinta \
     firefox chromium \
     ffmpeg imagemagick handbrake soundconverter yt-dlp \
-    thunderbird claws-mail \
+    thunderbird \
     xdg-user-dirs power-profiles-daemon plasma-firewall \
     samba kdenetwork-filesharing avahi wsdd \
     baloo plocate \
@@ -182,6 +182,17 @@ cp /boot/efi/EFI/GRUB/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI
 sed -i '/^auth\s\+include\s\+system-login/a auth\t\toptional\t\tpam_kwallet5.so' /etc/pam.d/sddm
 sed -i '/^session\s\+include\s\+system-login/a session\t\toptional\t\tpam_kwallet5.so auto_start' /etc/pam.d/sddm
 
+# --- SDDM Wayland configuration ---
+mkdir -p /etc/sddm.conf.d
+cat > /etc/sddm.conf.d/10-wayland.conf <<SDDMCONF
+[General]
+DisplayServer=wayland
+GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+[Wayland]
+CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+SDDMCONF
+
 # --- Snapper: create root config BEFORE enabling timers ---
 # Without this, snapper-timeline.timer fails silently on first boot.
 umount /.snapshots
@@ -210,22 +221,21 @@ module: /usr/lib/opensc-pkcs11.so
 critical: no
 P11KIT
 
-# --- Headscale client configuration ---
-# The Tailscale binary is used unchanged; only the coordination server URL
-# differs. HEADSCALE_URL points to the self-hosted Headscale instance,
-# keeping the control plane on Brazilian infrastructure and satisfying
-# Provimento 213's logical segregation requirements.
-#
-# --accept-dns=true enables MagicDNS from the Headscale server so nodes
-# resolve each other by hostname within the tailnet.
-# --accept-routes allows the Headscale server to push subnet routes,
-# useful if you later want to expose a serventia's LAN over the tailnet.
+# --- Headscale join script ---
+# tailscaled starts on first boot but does not auto-join; an authkey is
+# required. We bake the credentials into a root-only helper so the admin
+# just runs it once after the first login:
+#   sudo /usr/local/sbin/tailscale-join.sh
+cat > /usr/local/sbin/tailscale-join.sh <<TSJOIN
+#!/bin/bash
 tailscale up \
     --login-server="$HEADSCALE_URL" \
     --authkey="$HEADSCALE_AUTHKEY" \
     --hostname="$HOSTNAME" \
     --accept-dns=true \
-    --accept-routes=true || echo "WARN: tailscale up failed — run manually post-deploy"
+    --accept-routes=true
+TSJOIN
+chmod 700 /usr/local/sbin/tailscale-join.sh
 
 # --- Enable all system services ---
 systemctl enable \

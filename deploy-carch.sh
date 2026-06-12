@@ -4,6 +4,11 @@
 # ==========================================
 set -euo pipefail
 
+LOG=/tmp/carch-install.log
+exec > >(tee -a "$LOG") 2>&1
+
+trap 'printf "\033[1;31mERROR:\033[0m carch aborted at line %s — see %s\n" "$LINENO" "$LOG" >&2' ERR
+
 # 1. Variables — loaded from a secrets file that gets shredded after use.
 #    Create secrets.env alongside this script before running:
 #
@@ -55,6 +60,39 @@ stage_progs() {
     cp "$SCRIPT_DIR/progs.csv" /mnt/tmp/progs.csv
 }
 
+# Verifies root, UEFI mode, disk existence, and minimum size before any action.
+preflight_checks() {
+    [[ $EUID -eq 0 ]] \
+        || { printf 'ERROR: Run this script as root.\n' >&2; exit 1; }
+    [[ -d /sys/firmware/efi/efivars ]] \
+        || { printf 'ERROR: Not booted in UEFI mode — required for EFI GRUB install.\n' >&2; exit 1; }
+    [[ -b "$DISK" ]] \
+        || { printf 'ERROR: %s is not a block device.\n' "$DISK" >&2; exit 1; }
+    if grep -qs "^$DISK" /proc/mounts; then
+        printf 'ERROR: %s has mounted partitions — unmount them first.\n' "$DISK" >&2
+        exit 1
+    fi
+    local size_gib min_gib=20
+    size_gib=$(( $(blockdev --getsize64 "$DISK") / 1024 / 1024 / 1024 ))
+    if [[ $size_gib -lt $min_gib ]]; then
+        printf 'ERROR: %s is %s GiB — minimum required is %s GiB.\n' \
+            "$DISK" "$size_gib" "$min_gib" >&2
+        exit 1
+    fi
+}
+
+# Single interactive confirmation before the disk is touched — the one pause in
+# an otherwise fully automated script. Uses whiptail so it stands out visually.
+confirm_disk() {
+    local size_gib
+    size_gib=$(( $(blockdev --getsize64 "$DISK") / 1024 / 1024 / 1024 ))
+    whiptail --title "carch — LAST WARNING" \
+        --yes-button "Destroy and install" \
+        --no-button "Abort" \
+        --yesno "ALL DATA ON THE FOLLOWING DISK WILL BE PERMANENTLY DESTROYED:\n\n  Device : $DISK\n  Size   : ${size_gib} GiB\n  Host   : $HOSTNAME\n\nThis cannot be undone." \
+        12 60 || { printf 'Aborted by user.\n'; exit 1; }
+}
+
 # Connects the live environment to WiFi using iwd (iwctl).
 # Only called when WIFI_SSID/WIFI_PASS are set and we are not already online.
 connect_wifi() {
@@ -89,6 +127,14 @@ check_connectivity() {
 
 ### THE ACTUAL SCRIPT ###
 
+preflight_checks
+
+# Sync the live ISO clock before any TLS-dependent operations — a skewed clock
+# causes certificate validation failures that look like network problems.
+msg "Synchronizing system clock..."
+timedatectl set-ntp true
+sleep 3
+
 # 0. Network setup
 # Connect to WiFi if credentials are present and we are not already online.
 # The connectivity check always runs so the install never starts without network.
@@ -98,6 +144,12 @@ if [[ -n "${WIFI_SSID:-}" && -n "${WIFI_PASS:-}" ]]; then
     fi
 fi
 check_connectivity
+
+# Rank and save the fastest Brazilian mirrors before pacstrap downloads anything.
+msg "Selecting fastest Arch mirrors via reflector..."
+reflector --country Brazil --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+
+confirm_disk
 
 # 2. Partitioning
 msg "Partitioning $DISK..."

@@ -17,8 +17,10 @@ set -euo pipefail
 #    HEADSCALE_AUTHKEY="hskey-xxxxxxxxxxxxxxxxxxx"
 #    WIFI_SSID="nome-da-rede"        # optional
 #    WIFI_PASS="senha-wifi"           # optional
+#    DOTFILES_REPO="https://github.com/you/dotfiles.git"  # optional
 
-SECRETS_FILE="$(dirname "$0")/secrets.env"
+SCRIPT_DIR="$(dirname "$0")"
+SECRETS_FILE="$SCRIPT_DIR/secrets.env"
 if [[ ! -f "$SECRETS_FILE" ]]; then
     echo "ERROR: $SECRETS_FILE not found. Create it before running this script." >&2
     exit 1
@@ -35,17 +37,82 @@ for var in DISK HOSTNAME USER_NAME USER_PASS ROOT_PASS LUKS_PASS HEADSCALE_URL H
     fi
 done
 
+DOTFILES_REPO="${DOTFILES_REPO:-}"
+
+### FUNCTIONS ###
+
+# Non-interactive progress box; falls back to plain printf when no TTY is available.
+msg() { whiptail --title "carch" --infobox "$1" 7 70 || printf '\033[1;32m==>\033[0m %s\n' "$1"; }
+
+# Reads progs.csv and prints the name of every blank-tagged (pacstrap) package.
+build_pacstrap_pkgs() {
+    grep -v '^#\|^[[:space:]]*$' "$SCRIPT_DIR/progs.csv" \
+        | awk -F',' '$1 == "" { print $2 }'
+}
+
+# Copies progs.csv into the new root so it can be read inside the chroot.
+stage_progs() {
+    cp "$SCRIPT_DIR/progs.csv" /mnt/tmp/progs.csv
+}
+
+# Connects the live environment to WiFi using iwd (iwctl).
+# Only called when WIFI_SSID/WIFI_PASS are set and we are not already online.
+connect_wifi() {
+    local iface i=0
+    iface=$(iw dev | awk '$1 == "Interface" { print $2; exit }')
+    if [[ -z "$iface" ]]; then
+        printf 'ERROR: WIFI_SSID set but no wireless interface found.\n' >&2
+        exit 1
+    fi
+    msg "Connecting live environment to '${WIFI_SSID}' on ${iface}..."
+    iwctl --passphrase "$WIFI_PASS" station "$iface" connect "$WIFI_SSID"
+    until iw dev "$iface" link | grep -q "Connected to"; do
+        sleep 1
+        i=$((i + 1))
+        if [[ $i -ge 15 ]]; then
+            printf 'ERROR: WiFi connection to %s timed out after 15s.\n' "$WIFI_SSID" >&2
+            exit 1
+        fi
+    done
+}
+
+# Verifies that the Arch mirror and AUR are reachable before touching the disk.
+check_connectivity() {
+    msg "Verifying connectivity to Arch and AUR servers..."
+    for host in archlinux.org aur.archlinux.org; do
+        if ! curl --silent --head --max-time 10 "https://${host}" &>/dev/null; then
+            printf 'ERROR: Cannot reach %s — check your network and DNS.\n' "$host" >&2
+            exit 1
+        fi
+    done
+}
+
+### THE ACTUAL SCRIPT ###
+
+# 0. Network setup
+# Connect to WiFi if credentials are present and we are not already online.
+# The connectivity check always runs so the install never starts without network.
+if [[ -n "${WIFI_SSID:-}" && -n "${WIFI_PASS:-}" ]]; then
+    if ! curl --silent --head --max-time 5 "https://archlinux.org" &>/dev/null; then
+        connect_wifi
+    fi
+fi
+check_connectivity
+
 # 2. Partitioning
+msg "Partitioning $DISK..."
 parted -s "$DISK" mktable gpt \
     mkpart "EFI" fat32 0% 1GiB set 1 esp on \
     mkpart "linux" btrfs 1GiB 100%
 mkfs.fat -F 32 "${DISK}p1"
 
 # 3. LUKS Encryption Setup
+msg "Setting up LUKS encryption on ${DISK}p2..."
 echo -n "$LUKS_PASS" | cryptsetup luksFormat --batch-mode "${DISK}p2" -
 echo -n "$LUKS_PASS" | cryptsetup open "${DISK}p2" cryptroot -d -
 
 # 4. Format and Create Subvolumes on the Decrypted Container
+msg "Creating Btrfs filesystem and subvolumes..."
 mkfs.btrfs -f /dev/mapper/cryptroot
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
@@ -57,6 +124,7 @@ umount /mnt
 
 # 5. Mount Order (Root subvolume first, then directories)
 BTRFS_OPTS="noatime,compress=zstd,space_cache=v2"
+msg "Mounting subvolumes..."
 mount -o "${BTRFS_OPTS},subvol=@"          /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/{home,var/log,var/cache/pacman/pkg,.snapshots,boot/efi}
 mount -o "${BTRFS_OPTS},subvol=@home"      /dev/mapper/cryptroot /mnt/home
@@ -66,49 +134,14 @@ mount -o "${BTRFS_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
 mount "${DISK}p1" /mnt/boot/efi
 
 # 6. Base System Installation
-# Notes:
-#   - abiword/gnumeric replaced with libreoffice-fresh for .docx/.xlsx interop
-#     with court systems and CNJ tooling.
-#   - tailscale: installed from official repos; pointed at self-hosted Headscale
-#     coordination server instead of Tailscale's control plane (see step 8).
-#   - pcsc-lite + ccid + opensc: required for ICP-Brasil A3 USB/smartcard tokens.
-#     pcscd must be running or no token will be enumerated by any application.
-#   - aide: file integrity baseline — initialized at end of chroot after all
-#     packages are installed so the DB reflects the final system state.
-pacstrap -K /mnt \
-    base linux linux-firmware sof-firmware base-devel \
-    btrfs-progs grub efibootmgr \
-    snapper snap-pac grub-btrfs btrfs-assistant \
-    borg vorta udisks2 ntfs-3g kio-extras \
-    git neovim less man-db texinfo networkmanager \
-    pipewire pipewire-pulse pipewire-alsa \
-    bluez bluez-utils firewalld cups \
-    nano sudo sane sane-airscan skanlite \
-    plasma-desktop plasma-nm plasma-pa konsole tmux dolphin \
-    xorg-xwayland \
-    ttf-dejavu ttf-liberation noto-fonts noto-fonts-emoji ttf-cascadia-code \
-    aspell-pt remmina freerdp \
-    wine wine-mono wine-gecko \
-    keepassxc kleopatra ksshaskpass tailscale \
-    ark p7zip unrar zip unzip plasma-vault \
-    kate ghostwriter okular pdfarranger \
-    mpv vlc elisa \
-    bluedevil plasma-systemmonitor kcalc kolourpaint pinta \
-    firefox chromium \
-    ffmpeg imagemagick handbrake soundconverter yt-dlp \
-    thunderbird \
-    xdg-user-dirs power-profiles-daemon plasma-firewall \
-    samba kdenetwork-filesharing avahi wsdd \
-    baloo plocate \
-    clamav audit chrony \
-    cryptsetup libxml2 kscreen \
-    sddm sddm-kcm kwalletmanager kwallet-pam \
-    libreoffice-fresh libreoffice-fresh-pt-br mythes-pt-br \
-    openssh spectacle wl-clipboard tree \
-    pcsc-lite ccid opensc \
-    aide
+msg "Building package list from progs.csv..."
+mapfile -t PACSTRAP_PKGS < <(build_pacstrap_pkgs)
+msg "Installing ${#PACSTRAP_PKGS[@]} packages via pacstrap (this will take a while)..."
+pacstrap -K /mnt "${PACSTRAP_PKGS[@]}"
+stage_progs
 
 # 7. Generate Fstab
+msg "Generating fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # Grab the UUID of the raw encrypted partition — this must expand HERE (outer
@@ -121,10 +154,48 @@ CRYPT_UUID=$(blkid -s UUID -o value "${DISK}p2")
 # at heredoc-construction time, before arch-chroot ever sees the script.
 
 # 8. Non-Interactive Chroot Operations
+msg "Entering chroot for system configuration..."
 arch-chroot /mnt /bin/bash <<EOF
 set -euo pipefail
 
+# Progress helpers — whiptail works here because /dev/tty is bind-mounted by
+# arch-chroot; falls back to printf if the terminal is unavailable.
+msg()  { whiptail --title "carch" --infobox "\$1" 7 70 || printf '\033[1;32m==>\033[0m %s\n' "\$1"; }
+warn() { printf '\033[1;33m==> WARN:\033[0m %s\n' "\$1" >&2; }
+
+# Installs a single AUR package via yay; non-fatal so one failure doesn't abort.
+aurinstall() {
+    local pkg="\$1" comment="\$2"
+    msg "AUR (\$pkg): \$comment"
+    sudo -u "$USER_NAME" yay -S --noconfirm "\$pkg" >/dev/null 2>&1 \
+        || warn "\$pkg failed — install manually post-deploy"
+}
+
+# Reads /tmp/progs.csv and calls aurinstall() for every A-tagged entry.
+installationloop() {
+    local tag pkg comment
+    while IFS=, read -r tag pkg comment; do
+        comment=\$(printf '%s' "\$comment" | sed -E 's/(^\"|\"$)//g')
+        [[ "\$tag" == "A" ]] && aurinstall "\$pkg" "\$comment"
+    done < <(grep -v '^#\|^[[:space:]]*$' /tmp/progs.csv)
+}
+
+# Clones \$1 shallow into a temp dir and copies the result into \$2; leaves no
+# .git dir behind so the home directory isn't a git repo.
+putgitrepo() {
+    local repo="\$1" dest="\$2" tmp
+    msg "Deploying dotfiles from \$repo..."
+    tmp=\$(mktemp -d)
+    mkdir -p "\$dest"
+    chown "$USER_NAME":wheel "\$tmp" "\$dest"
+    sudo -u "$USER_NAME" git clone --depth 1 --single-branch --no-tags \
+        -q --recurse-submodules "\$repo" "\$tmp"
+    sudo -u "$USER_NAME" cp -rfT "\$tmp" "\$dest"
+    rm -rf "\$tmp"
+}
+
 # --- Timezone & Locale ---
+msg "Configuring locale and timezone..."
 ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
 hwclock --systohc
 sed -i 's/^#pt_BR.UTF-8 UTF-8/pt_BR.UTF-8 UTF-8/' /etc/locale.gen
@@ -139,6 +210,7 @@ cat >> /etc/hosts <<HOSTS
 HOSTS
 
 # --- Users & Passwords ---
+msg "Creating user $USER_NAME..."
 echo "root:$ROOT_PASS" | chpasswd
 useradd -m -G wheel -s /bin/bash "$USER_NAME"
 echo "$USER_NAME:$USER_PASS" | chpasswd
@@ -164,10 +236,12 @@ SYSCTL
 systemctl disable systemd-timesyncd || true
 
 # --- Initramfs: inject 'encrypt' hook after 'block' ---
+msg "Rebuilding initramfs with encrypt hook..."
 sed -i 's/\bblock\b/block encrypt/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
 # --- GRUB: LUKS + Btrfs snapshot boot support ---
+msg "Installing GRUB bootloader..."
 sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\"|GRUB_CMDLINE_LINUX_DEFAULT=\"cryptdevice=UUID=$CRYPT_UUID:cryptroot root=/dev/mapper/cryptroot |" /etc/default/grub
 echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
 
@@ -195,6 +269,7 @@ SDDMCONF
 
 # --- Snapper: create root config BEFORE enabling timers ---
 # Without this, snapper-timeline.timer fails silently on first boot.
+msg "Configuring Snapper..."
 umount /.snapshots
 rm -rf /.snapshots
 snapper -c root create-config /
@@ -206,15 +281,6 @@ mount -o $BTRFS_OPTS,subvol=@snapshots /dev/mapper/cryptroot /.snapshots
 systemctl enable grub-btrfs.path
 
 # --- ICP-Brasil A3 token support ---
-# pcscd is the PC/SC daemon that brokers communication between applications
-# (Lacuna Web PKI, Firefox NSS, OpenSC) and USB smartcard/token hardware.
-# Without it running, no A3 token will be enumerated by anything regardless
-# of what other software is installed.
-#
-# opensc provides PKCS#11 module at /usr/lib/opensc-pkcs11.so — this is the
-# library that Firefox, Chromium and NSS-aware apps load to discover ICP-Brasil
-# certificates on the token. We register it system-wide via p11-kit so that
-# all applications pick it up automatically without per-app configuration.
 mkdir -p /etc/pkcs11/modules
 cat > /etc/pkcs11/modules/opensc.module <<P11KIT
 module: /usr/lib/opensc-pkcs11.so
@@ -238,6 +304,7 @@ TSJOIN
 chmod 700 /usr/local/sbin/tailscale-join.sh
 
 # --- Enable all system services ---
+msg "Enabling system services..."
 systemctl enable \
     NetworkManager \
     sshd \
@@ -267,54 +334,48 @@ updatedb || true
 # --- yay (AUR helper) ---
 # makepkg refuses to run as root, so everything here runs as the regular user.
 # We temporarily grant passwordless sudo for the build, then lock it back down.
+msg "Bootstrapping AUR helper (yay)..."
+
+# Use all CPU cores for AUR compilation.
+sed -i "s/-j2/-j\$(nproc)/;/^#MAKEFLAGS/s/^#//" /etc/makepkg.conf
+
+# Trap ensures the temp passwordless-sudo file is removed on any exit, including
+# abnormal ones, so it never survives a mid-install crash.
+trap 'rm -f /etc/sudoers.d/aur-bootstrap' HUP INT QUIT TERM PWR EXIT
 echo "$USER_NAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/aur-bootstrap
 
 sudo -u "$USER_NAME" bash <<AUREOF
 set -euo pipefail
-
-# Build and install yay from AUR
 git clone https://aur.archlinux.org/yay.git /tmp/yay
 cd /tmp/yay
 makepkg -si --noconfirm
 rm -rf /tmp/yay
-
-# serpro-signer: wraps a Java app that activates against Serpro servers on
-# first real user session — installation here is fine, activation is not.
-yay -S --noconfirm hunspell-pt-br \
-    || echo "WARN: hunspell-pt-br failed — install manually post-deploy"
-
-yay -S --noconfirm serpro-signer \
-    || echo "WARN: serpro-signer failed — install manually post-deploy"
-
-# pjeoffice-pro: CNJ-maintained AUR package; can lag behind upstream releases.
-# Failure here is non-fatal; the || echo ensures the deployment continues.
-yay -S --noconfirm pjeoffice-pro \
-    || echo "WARN: pjeoffice-pro failed — install manually post-deploy"
-
-# lacuna-webpki: Lacuna Software's Web PKI bridge, required for ICP-Brasil A3
-# token signing in web apps (PJe, e-Notariado, etc.).
-# Note: the browser extension still needs to be enabled manually per user
-# (Chrome Web Store / Firefox Add-ons) on first login.
-yay -S --noconfirm lacuna-webpki \
-    || echo "WARN: lacuna-webpki failed — install manually post-deploy"
-
 AUREOF
 
-# Revoke the temporary passwordless sudo now that AUR bootstrap is done
-rm /etc/sudoers.d/aur-bootstrap
+# --- AUR package installation (driven by progs.csv) ---
+msg "Installing AUR packages from progs.csv..."
+installationloop
+
+# Revoke temporary passwordless sudo (trap also covers abnormal exits).
+trap - HUP INT QUIT TERM PWR EXIT
+rm -f /etc/sudoers.d/aur-bootstrap
+
+# --- Dotfiles (optional — set DOTFILES_REPO in secrets.env) ---
+[[ -n "$DOTFILES_REPO" ]] && putgitrepo "$DOTFILES_REPO" "/home/$USER_NAME"
 
 # --- AIDE file integrity baseline ---
 # Must run AFTER all packages and AUR installs are complete so the DB
 # reflects the intended final system state. Any subsequent drift from
 # this baseline is detectable via 'aide --check'.
+msg "Initializing AIDE file integrity baseline..."
 aide --init
 mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
-echo "AIDE baseline initialized."
 
 EOF
 
 # 9. WiFi pre-configuration (optional)
 if [[ -n "${WIFI_SSID:-}" && -n "${WIFI_PASS:-}" ]]; then
+    msg "Pre-configuring WiFi network '${WIFI_SSID}'..."
     mkdir -p /mnt/etc/NetworkManager/system-connections
     cat > "/mnt/etc/NetworkManager/system-connections/${WIFI_SSID}.nmconnection" <<NMEOF
 [connection]
@@ -341,6 +402,7 @@ NMEOF
 fi
 
 # 10. Unmount and reboot
+msg "Installation complete — unmounting and rebooting."
 umount -R /mnt
 cryptsetup close cryptroot
 reboot

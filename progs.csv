@@ -1,0 +1,151 @@
+#TAG,NAME,PURPOSE
+# --- Base system ---
+,base,is the base Arch Linux meta-package
+,linux,is the kernel
+,linux-firmware,provides firmware for common hardware
+,sof-firmware,provides firmware for Sound Open Firmware audio devices
+,base-devel,is the base development toolchain required for building AUR packages
+,libnewt,provides whiptail for installer progress display
+# --- Boot & filesystem ---
+,btrfs-progs,provides Btrfs filesystem utilities
+,grub,is the bootloader
+,efibootmgr,manages EFI boot entries
+,snapper,manages Btrfs snapshots
+,snap-pac,hooks pacman to create pre/post snapshots automatically
+,grub-btrfs,adds Btrfs snapshot entries to the GRUB boot menu
+,btrfs-assistant,is a GUI frontend for Btrfs and Snapper management
+# --- Backup & storage ---
+,borg,is a deduplicating backup program
+,vorta,is a GUI frontend for Borg backups
+,udisks2,provides disk management services
+,ntfs-3g,allows read/write access to NTFS partitions
+,kio-extras,adds extra KIO protocols for Dolphin
+# --- Core tools ---
+,git,is the version control system
+,neovim,is a modern extensible text editor
+,less,is a terminal pager
+,man-db,provides manual pages
+,texinfo,provides info pages
+,networkmanager,manages network connections
+,openssh,provides SSH client and server
+,tree,displays directory trees
+,nano,is a simple terminal text editor
+,sudo,allows running commands as another user
+# --- Audio ---
+,pipewire,is the audio and video server
+,pipewire-pulse,provides PulseAudio compatibility for PipeWire
+,pipewire-alsa,provides ALSA compatibility for PipeWire
+# --- Bluetooth & printing ---
+,bluez,is the Bluetooth protocol stack
+,bluez-utils,provides Bluetooth utilities including bluetoothctl
+,cups,is the print server
+# --- Security & hardening ---
+,firewalld,is the dynamic firewall manager
+,clamav,is the open-source antivirus engine
+,audit,is the Linux audit framework
+,aide,provides file integrity checking
+# --- Scanning ---
+,sane,is the scanner access framework
+,sane-airscan,enables driverless network scanner support
+,skanlite,is a KDE scanning application
+# --- KDE Plasma desktop ---
+,plasma-desktop,is the KDE Plasma desktop environment
+,plasma-nm,is the NetworkManager applet for Plasma
+,plasma-pa,is the PulseAudio/PipeWire volume control for Plasma
+,konsole,is the KDE terminal emulator
+,tmux,is a terminal multiplexer
+,dolphin,is the KDE file manager
+,bluedevil,is the Bluetooth manager for Plasma
+,plasma-systemmonitor,is the KDE system monitor
+,kcalc,is the KDE calculator
+,kolourpaint,is a simple paint application
+,pinta,is a drawing and image editing program
+,kscreen,is the KDE screen management tool
+,sddm,is the Simple Desktop Display Manager
+,sddm-kcm,is the KDE control module for SDDM
+,kwalletmanager,is the KDE Wallet manager GUI
+,kwallet-pam,enables KWallet auto-unlock via PAM
+,plasma-vault,provides encrypted vaults in Plasma
+,plasma-firewall,is the KDE firewall frontend
+,power-profiles-daemon,manages CPU power profiles
+,xdg-user-dirs,manages standard user directories
+,xorg-xwayland,provides XWayland compatibility for X11 apps
+# --- Fonts ---
+,ttf-dejavu,provides the DejaVu font family
+,ttf-liberation,provides metric-compatible replacements for common Windows fonts
+,noto-fonts,is an expansive font package for broad Unicode coverage
+,noto-fonts-emoji,provides emoji support
+,ttf-cascadia-code,is a monospace font with ligatures designed for terminals
+# --- Office & productivity ---
+# libreoffice-fresh replaces abiword/gnumeric for .docx/.xlsx interop with court
+# systems and CNJ tooling.
+,libreoffice-fresh,is the full LibreOffice suite (latest branch)
+,libreoffice-fresh-pt-br,provides Brazilian Portuguese language support for LibreOffice
+,mythes-pt-br,provides the Brazilian Portuguese thesaurus for LibreOffice
+,aspell-pt,is the Brazilian Portuguese spell checker
+,kate,is the KDE advanced text editor
+,ghostwriter,is a distraction-free Markdown editor
+,okular,is the KDE document viewer
+,pdfarranger,is a PDF page combiner and editor
+,spectacle,is the KDE screenshot tool
+,wl-clipboard,provides clipboard utilities for Wayland
+# --- Remote & compatibility ---
+,remmina,is a remote desktop client supporting RDP and VNC
+,freerdp,provides the RDP protocol library used by Remmina
+,wine,runs Windows applications on Linux
+,wine-mono,provides .NET runtime support for Wine
+,wine-gecko,provides Internet Explorer compatibility for Wine
+# --- Security tools ---
+,keepassxc,is a cross-platform password manager
+,kleopatra,is the KDE certificate and key manager
+,ksshaskpass,is the KDE SSH passphrase dialog
+# tailscale is pointed at a self-hosted Headscale server rather than Tailscale's
+# control plane — the join script is installed in /usr/local/sbin.
+,tailscale,is the WireGuard-based VPN client
+,cryptsetup,provides LUKS disk encryption tools
+,libxml2,is an XML parsing library
+# --- Archive tools ---
+,ark,is the KDE archive manager
+,p7zip,provides 7-Zip compression support
+,unrar,extracts RAR archives
+,zip,creates ZIP archives
+,unzip,extracts ZIP archives
+# --- Media ---
+,mpv,is a versatile media player
+,vlc,is a full-featured media player
+,elisa,is the KDE music player
+,ffmpeg,encodes and decodes audio and video
+,imagemagick,manipulates images from the command line
+,handbrake,is a video transcoder
+,soundconverter,converts audio files between formats
+,yt-dlp,downloads videos from YouTube and other sites
+# --- Email ---
+,thunderbird,is the Mozilla email client
+# --- File sharing & discovery ---
+,samba,provides SMB/CIFS file sharing
+,kdenetwork-filesharing,integrates Samba sharing into Dolphin
+,avahi,is the mDNS daemon for zero-config networking
+,wsdd,is the Web Services Discovery Daemon for Windows network visibility
+,baloo,is the KDE file indexing and search framework
+,plocate,provides fast file location via updatedb
+# --- Time sync ---
+,chrony,is an NTP implementation for accurate timekeeping
+# --- ICP-Brasil A3 smartcard ---
+# pcscd brokers USB token communication; without it no A3 token is enumerated by
+# any application regardless of other software installed.
+# opensc provides /usr/lib/opensc-pkcs11.so, registered system-wide via p11-kit
+# so Firefox, Chromium and NSS-aware apps discover ICP-Brasil certs automatically.
+,pcsc-lite,is the PC/SC daemon that brokers USB smartcard communication
+,ccid,is the CCID driver for USB smartcard readers and tokens
+,opensc,provides PKCS#11 support for ICP-Brasil A3 tokens
+# --- AUR: language ---
+A,hunspell-pt-br,provides Brazilian Portuguese spell checking for Hunspell apps
+# --- AUR: cartório/legal tools ---
+# serpro-signer wraps a Java app that activates against Serpro servers on first
+# real user session — installation here is fine; activation is not.
+A,serpro-signer,is Serpro's document signing app for ICP-Brasil certificates
+# pjeoffice-pro is the CNJ-maintained AUR package and can lag behind upstream.
+A,pjeoffice-pro,is the CNJ PJe Office plugin for digital process signing
+# lacuna-webpki browser extension must still be enabled manually per user on first
+# login (Chrome Web Store / Firefox Add-ons).
+A,lacuna-webpki,is Lacuna Software's Web PKI bridge for A3 token signing in browsers
